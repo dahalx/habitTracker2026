@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:intl/intl.dart';
-import 'package:path_provider/path_provider.dart';
 
 /// ============================================================================
 /// NOTION-STYLE HABIT TRACKER & OBSIDIAN EXPORTER - GALAXY S25 STANDALONE EDITION
