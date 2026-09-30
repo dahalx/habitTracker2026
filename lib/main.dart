@@ -1,5 +1,6 @@
+
 import 'dart:async';
-import 'dart:io';
+import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,7 +8,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:intl/intl.dart';
 
 /// ============================================================================
-/// NOTION-STYLE HABIT TRACKER & OBSIDIAN EXPORTER - GALAXY S25 STANDALONE EDITION
+/// NOTION-STYLE HABIT TRACKER & OBSIDIAN EXPORTER - WEB & MOBILE READY
 /// ============================================================================
 
 void main() async {
@@ -24,15 +25,6 @@ void main() async {
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
   ]);
-
-  SystemChrome.setSystemUIOverlayStyle(
-    const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-      systemNavigationBarColor: Colors.transparent,
-      systemNavigationBarIconBrightness: Brightness.light,
-    ),
-  );
 
   runApp(const NotionHabitTrackerApp());
 }
@@ -76,7 +68,7 @@ class HabitProperty {
   final String category;
   final HabitPropertyType type;
   final List<String> options; // For multi-select
-  final int targetDaysPerWeek; // 1 - 7
+  final int targetDaysPerWeek;
   final int sortOrder;
 
   HabitProperty({
@@ -125,7 +117,8 @@ class DailyEntryData {
   final Map<String, bool> checkboxes;
   final Map<String, List<String>> multiSelects;
   final Map<String, String> textValues;
-  final Map<String, String> reflections; // wealth, uncomfortable, recordBreaking, memories
+  final Map<String, String> reflections;
+  final List<HabitProperty>? dayHabits; // Day-specific habit override
   final String updatedAt;
 
   DailyEntryData({
@@ -134,6 +127,7 @@ class DailyEntryData {
     this.multiSelects = const {},
     this.textValues = const {},
     this.reflections = const {},
+    this.dayHabits,
     required this.updatedAt,
   });
 
@@ -144,11 +138,19 @@ class DailyEntryData {
       'multiSelects': multiSelects,
       'textValues': textValues,
       'reflections': reflections,
+      'dayHabits': dayHabits?.map((h) => h.toMap()).toList(),
       'updatedAt': updatedAt,
     };
   }
 
   factory DailyEntryData.fromMap(Map<dynamic, dynamic> map) {
+    List<HabitProperty>? parsedDayHabits;
+    if (map['dayHabits'] != null) {
+      parsedDayHabits = (map['dayHabits'] as List)
+          .map((e) => HabitProperty.fromMap(e as Map))
+          .toList();
+    }
+
     return DailyEntryData(
       dateKey: map['dateKey'] as String,
       checkboxes: Map<String, bool>.from(map['checkboxes'] ?? {}),
@@ -158,6 +160,7 @@ class DailyEntryData {
           {},
       textValues: Map<String, String>.from(map['textValues'] ?? {}),
       reflections: Map<String, String>.from(map['reflections'] ?? {}),
+      dayHabits: parsedDayHabits,
       updatedAt: map['updatedAt'] as String? ?? DateTime.now().toIso8601String(),
     );
   }
@@ -167,6 +170,7 @@ class DailyEntryData {
     Map<String, List<String>>? multiSelects,
     Map<String, String>? textValues,
     Map<String, String>? reflections,
+    List<HabitProperty>? dayHabits,
   }) {
     return DailyEntryData(
       dateKey: dateKey,
@@ -174,13 +178,14 @@ class DailyEntryData {
       multiSelects: multiSelects ?? this.multiSelects,
       textValues: textValues ?? this.textValues,
       reflections: reflections ?? this.reflections,
+      dayHabits: dayHabits ?? this.dayHabits,
       updatedAt: DateTime.now().toIso8601String(),
     );
   }
 }
 
 /// ============================================================================
-/// REPOSITORY & HIVE DATABASE CONTROLLER
+/// REPOSITORY & DATABASE CONTROLLER
 /// ============================================================================
 
 class HabitHiveRepository {
@@ -230,15 +235,6 @@ class HabitHiveRepository {
           targetDaysPerWeek: 7,
           sortOrder: 3,
         ),
-        HabitProperty(
-          id: 'h_meditate',
-          title: 'Mindful Meditation',
-          icon: '🧘',
-          category: 'Wellness',
-          type: HabitPropertyType.checkbox,
-          targetDaysPerWeek: 7,
-          sortOrder: 4,
-        ),
       ];
 
       for (var h in defaultHabits) {
@@ -247,7 +243,7 @@ class HabitHiveRepository {
     }
   }
 
-  List<HabitProperty> getAllHabits() {
+  List<HabitProperty> getAllTemplateHabits() {
     final list = habitsBox.values
         .map((e) => HabitProperty.fromMap(e as Map))
         .toList();
@@ -255,11 +251,11 @@ class HabitHiveRepository {
     return list;
   }
 
-  Future<void> saveHabit(HabitProperty habit) async {
+  Future<void> saveTemplateHabit(HabitProperty habit) async {
     await habitsBox.put(habit.id, habit.toMap());
   }
 
-  Future<void> deleteHabit(String id) async {
+  Future<void> deleteTemplateHabit(String id) async {
     await habitsBox.delete(id);
   }
 
@@ -272,6 +268,13 @@ class HabitHiveRepository {
       dateKey: dateKey,
       updatedAt: DateTime.now().toIso8601String(),
     );
+  }
+
+  List<HabitProperty> getActiveHabitsForDate(DailyEntryData entry) {
+    if (entry.dayHabits != null && entry.dayHabits!.isNotEmpty) {
+      return entry.dayHabits!;
+    }
+    return getAllTemplateHabits();
   }
 
   Future<void> saveEntry(DailyEntryData entry) async {
@@ -305,7 +308,7 @@ class HabitHiveRepository {
 }
 
 /// ============================================================================
-/// NOTION DATABASE SCREEN: DUAL VIEW (DAILY PAGE VIEW vs MONTHLY TABLE VIEW)
+/// NOTION DATABASE SCREEN
 /// ============================================================================
 
 class NotionDatabaseScreen extends StatefulWidget {
@@ -319,8 +322,8 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
   int _selectedViewIndex = 0; // 0 = Daily Page View, 1 = Monthly Table View
   late String _activeDateKey;
   late DateTime _activeDate;
-  List<HabitProperty> _habits = [];
   late DailyEntryData _currentEntry;
+  List<HabitProperty> _activeHabits = [];
   bool _isLoading = true;
 
   @override
@@ -338,8 +341,8 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
 
   void _loadState() {
     setState(() {
-      _habits = HabitHiveRepository.instance.getAllHabits();
       _currentEntry = HabitHiveRepository.instance.getEntryForDate(_activeDateKey);
+      _activeHabits = HabitHiveRepository.instance.getActiveHabitsForDate(_currentEntry);
       _isLoading = false;
     });
   }
@@ -349,6 +352,7 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
       _activeDate = date;
       _activeDateKey = DateFormat('yyyy-MM-dd').format(date);
       _currentEntry = HabitHiveRepository.instance.getEntryForDate(_activeDateKey);
+      _activeHabits = HabitHiveRepository.instance.getActiveHabitsForDate(_currentEntry);
     });
   }
 
@@ -357,9 +361,9 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
     return '@${d.month}.${d.day}.${d.year}-$dayName';
   }
 
-  String _generateMinimalMarkdown(DateTime date, DailyEntryData entry) {
+  String _generateMinimalMarkdown(DateTime date, DailyEntryData entry, List<HabitProperty> habits) {
     final notionTitle = _formatNotionDateHeader(date);
-    final score = HabitHiveRepository.instance.calculateDailyScore(_habits, entry);
+    final score = HabitHiveRepository.instance.calculateDailyScore(habits, entry);
 
     final buffer = StringBuffer();
     buffer.writeln('---');
@@ -374,7 +378,7 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
     buffer.writeln('# $notionTitle\n');
 
     final completedItems = <String>[];
-    for (var habit in _habits) {
+    for (var habit in habits) {
       if (habit.type == HabitPropertyType.checkbox) {
         if (entry.checkboxes[habit.id] == true) {
           completedItems.add('- [x] ${habit.title}');
@@ -401,103 +405,50 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
       buffer.writeln('');
     }
 
-    final wealth = entry.reflections['wealth']?.trim();
-    final uncomfortable = entry.reflections['uncomfortable']?.trim();
-    final recordBreaking = entry.reflections['recordBreaking']?.trim();
-    final memories = entry.reflections['memories']?.trim();
-
-    final hasReflections = (wealth?.isNotEmpty ?? false) ||
-        (uncomfortable?.isNotEmpty ?? false) ||
-        (recordBreaking?.isNotEmpty ?? false) ||
-        (memories?.isNotEmpty ?? false);
-
-    if (hasReflections) {
-      buffer.writeln('## Reflections\n');
-
-      if (wealth != null && wealth.isNotEmpty) {
-        buffer.writeln('### Wealth\n');
-        for (var line in wealth.split('\n')) {
-          if (line.trim().isNotEmpty) buffer.writeln('- ${line.trim()}');
-        }
-        buffer.writeln('');
-      }
-
-      if (uncomfortable != null && uncomfortable.isNotEmpty) {
-        buffer.writeln('<aside>\n💡\n');
-        buffer.writeln('**Did I do anything uncomfortable today?**\n');
-        for (var line in uncomfortable.split('\n')) {
-          if (line.trim().isNotEmpty) buffer.writeln('- ${line.trim()}');
-        }
-        buffer.writeln('\n</aside>\n');
-      }
-
-      if (recordBreaking != null && recordBreaking.isNotEmpty) {
-        buffer.writeln('<aside>\n💡\n');
-        buffer.writeln('**Any record breaking things I did today?**\n');
-        for (var line in recordBreaking.split('\n')) {
-          if (line.trim().isNotEmpty) buffer.writeln('- ${line.trim()}');
-        }
-        buffer.writeln('\n</aside>\n');
-      }
-
-      if (memories != null && memories.isNotEmpty) {
-        buffer.writeln('### Memories\n');
-        for (var line in memories.split('\n')) {
-          if (line.trim().isNotEmpty) buffer.writeln('- ${line.trim()}');
-        }
-        buffer.writeln('');
-      }
-    }
-
     return buffer.toString().trimRight();
   }
 
   Future<void> _exportToObsidianVault() async {
-    final mdContent = _generateMinimalMarkdown(_activeDate, _currentEntry);
+    final mdContent = _generateMinimalMarkdown(_activeDate, _currentEntry, _activeHabits);
     final filename = '$_activeDateKey.md';
 
     try {
-      String? selectedDirectory = await FilePicker.platform.getDirectoryPath(
-        dialogTitle: 'Select your Obsidian Vault or Target Folder',
+      String? outputFile = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save Obsidian Note',
+        fileName: filename,
+        type: FileType.custom,
+        allowedExtensions: ['md', 'txt'],
+        bytes: Uint8List.fromList(utf8.encode(mdContent)),
       );
 
-      if (selectedDirectory != null) {
-        final filePath = '$selectedDirectory/$filename';
-        final file = File(filePath);
-        await file.writeAsString(mdContent);
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Saved to Obsidian: $filename'),
-              backgroundColor: const Color(0xFF238636),
-            ),
-          );
-        }
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Export canceled.')),
-          );
-        }
+      if (outputFile != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Saved to Obsidian: $filename'),
+            backgroundColor: const Color(0xFF238636),
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Export failed: $e'),
-            backgroundColor: Colors.red,
+            content: Text('Export error: ${e.toString()}'),
+            backgroundColor: Colors.redAccent,
           ),
         );
       }
     }
   }
 
-  void _showAddHabitDialog() {
-    final titleController = TextEditingController();
-    final iconController = TextEditingController(text: '🎯');
-    final optionsController = TextEditingController();
-    HabitPropertyType selectedType = HabitPropertyType.checkbox;
+  void _showHabitEditorDialog({HabitProperty? existingHabit}) {
+    final isEditing = existingHabit != null;
+    final titleController = TextEditingController(text: existingHabit?.title ?? '');
+    final iconController = TextEditingController(text: existingHabit?.icon ?? '🎯');
+    final optionsController = TextEditingController(text: existingHabit?.options.join(', ') ?? '');
+    HabitPropertyType selectedType = existingHabit?.type ?? HabitPropertyType.checkbox;
+
+    bool applyToThisDayOnly = true;
 
     showModalBottomSheet(
       context: context,
@@ -520,11 +471,22 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Create New Habit',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        isEditing ? 'Edit Habit' : 'Create New Habit',
+                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                      ),
+                      if (isEditing)
+                        IconButton(
+                          icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                          tooltip: 'Delete Habit',
+                          onPressed: () => _confirmDeleteHabit(existingHabit, applyToThisDayOnly, ctx),
+                        ),
+                    ],
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
                   Row(
                     children: [
                       SizedBox(
@@ -556,7 +518,7 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<HabitPropertyType>(
-                    value: selectedType,
+                    initialValue: selectedType,
                     dropdownColor: const Color(0xFF161B22),
                     decoration: const InputDecoration(
                       labelText: 'Property Type',
@@ -590,14 +552,39 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
                       controller: optionsController,
                       decoration: const InputDecoration(
                         labelText: 'Options (comma separated)',
-                        hintText: 'e.g. Red, Blue, Green',
+                        hintText: 'e.g. Blueberry, Walnut, Almonds',
                         filled: true,
                         fillColor: Color(0xFF0D1117),
                         border: OutlineInputBorder(),
                       ),
                     ),
                   ],
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 14),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0D1117),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFF30363D)),
+                    ),
+                    child: SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        applyToThisDayOnly ? 'Apply to This Day Only ($_activeDateKey)' : 'Apply to Master Template (Default for All New Days)',
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white),
+                      ),
+                      subtitle: Text(
+                        applyToThisDayOnly ? 'Will NOT affect past or future days.' : 'Updates default list for uncustomized days.',
+                        style: const TextStyle(fontSize: 10, color: Colors.grey),
+                      ),
+                      value: applyToThisDayOnly,
+                      activeColor: const Color(0xFF388BFD),
+                      onChanged: (val) {
+                        setModalState(() => applyToThisDayOnly = val);
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 16),
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
@@ -615,22 +602,38 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
                             .where((e) => e.isNotEmpty)
                             .toList();
 
-                        final newHabit = HabitProperty(
-                          id: 'h_${DateTime.now().millisecondsSinceEpoch}',
+                        final habitToSave = HabitProperty(
+                          id: existingHabit?.id ?? 'h_${DateTime.now().millisecondsSinceEpoch}',
                           title: title,
                           icon: iconController.text.trim().isEmpty ? '🎯' : iconController.text.trim(),
-                          category: 'Custom',
+                          category: existingHabit?.category ?? 'Custom',
                           type: selectedType,
                           options: options,
-                          targetDaysPerWeek: 7,
-                          sortOrder: _habits.length,
+                          targetDaysPerWeek: existingHabit?.targetDaysPerWeek ?? 7,
+                          sortOrder: existingHabit?.sortOrder ?? _activeHabits.length,
                         );
 
-                        await HabitHiveRepository.instance.saveHabit(newHabit);
+                        if (applyToThisDayOnly) {
+                          final currentList = List<HabitProperty>.from(_activeHabits);
+                          if (isEditing) {
+                            final idx = currentList.indexWhere((h) => h.id == habitToSave.id);
+                            if (idx != -1) currentList[idx] = habitToSave;
+                          } else {
+                            currentList.add(habitToSave);
+                          }
+                          final newEntry = _currentEntry.copyWith(dayHabits: currentList);
+                          await HabitHiveRepository.instance.saveEntry(newEntry);
+                        } else {
+                          await HabitHiveRepository.instance.saveTemplateHabit(habitToSave);
+                        }
+
                         _loadState();
                         if (context.mounted) Navigator.pop(context);
                       },
-                      child: const Text('Save Habit', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      child: Text(
+                        isEditing ? 'Save Changes' : 'Create Habit',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                      ),
                     ),
                   ),
                 ],
@@ -639,6 +642,41 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
           },
         );
       },
+    );
+  }
+
+  void _confirmDeleteHabit(HabitProperty habit, bool applyToThisDayOnly, BuildContext modalCtx) {
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: const Color(0xFF161B22),
+        title: const Text('Delete Habit', style: TextStyle(color: Colors.white)),
+        content: Text('Are you sure you want to delete "${habit.title}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () async {
+              if (applyToThisDayOnly) {
+                final currentList = List<HabitProperty>.from(_activeHabits);
+                currentList.removeWhere((h) => h.id == habit.id);
+                final newEntry = _currentEntry.copyWith(dayHabits: currentList);
+                await HabitHiveRepository.instance.saveEntry(newEntry);
+              } else {
+                await HabitHiveRepository.instance.deleteTemplateHabit(habit.id);
+              }
+
+              if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+              if (modalCtx.mounted) Navigator.pop(modalCtx);
+              _loadState();
+            },
+            child: const Text('Delete', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
     );
   }
 
@@ -680,7 +718,7 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
         ),
         actions: [
           IconButton(
-            tooltip: 'Export to Obsidian Folder',
+            tooltip: 'Export Day to Obsidian (.md)',
             icon: const Icon(Icons.folder_zip_outlined, color: Color(0xFF388BFD)),
             onPressed: _exportToObsidianVault,
           ),
@@ -760,16 +798,16 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
       ),
       body: _selectedViewIndex == 0 ? _buildDailyPageView() : _buildMonthlyTableView(),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showAddHabitDialog,
+        onPressed: () => _showHabitEditorDialog(),
         backgroundColor: const Color(0xFF388BFD),
         icon: const Icon(Icons.add, color: Colors.white),
-        label: const Text('New Habit', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        label: const Text('Add / Customize Habit', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
       ),
     );
   }
 
   Widget _buildDailyPageView() {
-    final score = HabitHiveRepository.instance.calculateDailyScore(_habits, _currentEntry);
+    final score = HabitHiveRepository.instance.calculateDailyScore(_activeHabits, _currentEntry);
 
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -827,26 +865,26 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
           ),
         ),
         const SizedBox(height: 16),
-        const Text(
-          'Properties',
-          style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFFF0F6FC)),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              _currentEntry.dayHabits != null ? 'Habits (Customized for Today)' : 'Habits (Default Template)',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFFF0F6FC)),
+            ),
+            if (_currentEntry.dayHabits != null)
+              TextButton(
+                onPressed: () async {
+                  final newEntry = _currentEntry.copyWith(dayHabits: null);
+                  await HabitHiveRepository.instance.saveEntry(newEntry);
+                  _loadState();
+                },
+                child: const Text('Reset to Template', style: TextStyle(fontSize: 11, color: Colors.orangeAccent)),
+              ),
+          ],
         ),
         const SizedBox(height: 8),
-        ..._habits.map((habit) => _buildHabitPropertyTile(habit)),
-        const SizedBox(height: 20),
-        _buildReflectionsEditor(),
-        const SizedBox(height: 16),
-        ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF238636),
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
-          onPressed: _exportToObsidianVault,
-          icon: const Icon(Icons.folder_shared, size: 18),
-          label: const Text('Export Day to Obsidian Vault (.md)', style: TextStyle(fontWeight: FontWeight.bold)),
-        ),
+        ..._activeHabits.map((habit) => _buildHabitPropertyTile(habit)),
       ],
     );
   }
@@ -897,138 +935,89 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
   }
 
   Widget _buildHabitPropertyTile(HabitProperty habit) {
-    if (habit.type == HabitPropertyType.checkbox) {
-      final isChecked = _currentEntry.checkboxes[habit.id] ?? false;
-      return Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: const Color(0xFF161B22),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: isChecked ? const Color(0xFF238636) : const Color(0xFF30363D)),
-        ),
-        child: Row(
-          children: [
-            Checkbox(
-              value: isChecked,
-              activeColor: const Color(0xFF238636),
-              onChanged: (val) {
-                final updated = Map<String, bool>.from(_currentEntry.checkboxes);
-                updated[habit.id] = val ?? false;
-                final newEntry = _currentEntry.copyWith(checkboxes: updated);
-                HabitHiveRepository.instance.saveEntry(newEntry);
-                setState(() => _currentEntry = newEntry);
-              },
-            ),
-            Text(habit.icon, style: const TextStyle(fontSize: 18)),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                habit.title,
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: isChecked ? Colors.grey : Colors.white,
-                  decoration: isChecked ? TextDecoration.lineThrough : null,
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF161B22),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF30363D)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              if (habit.type == HabitPropertyType.checkbox)
+                Checkbox(
+                  value: _currentEntry.checkboxes[habit.id] ?? false,
+                  activeColor: const Color(0xFF238636),
+                  onChanged: (val) {
+                    final updated = Map<String, bool>.from(_currentEntry.checkboxes);
+                    updated[habit.id] = val ?? false;
+                    final newEntry = _currentEntry.copyWith(checkboxes: updated);
+                    HabitHiveRepository.instance.saveEntry(newEntry);
+                    setState(() => _currentEntry = newEntry);
+                  },
+                ),
+              Text(habit.icon, style: const TextStyle(fontSize: 18)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  habit.title,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: (_currentEntry.checkboxes[habit.id] ?? false) ? Colors.grey : Colors.white,
+                    decoration: (_currentEntry.checkboxes[habit.id] ?? false) ? TextDecoration.lineThrough : null,
+                  ),
                 ),
               ),
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: const Color(0xFF21262D),
-                borderRadius: BorderRadius.circular(6),
+              IconButton(
+                icon: const Icon(Icons.edit_outlined, size: 16, color: Color(0xFF8B949E)),
+                tooltip: 'Edit / Delete Habit',
+                onPressed: () => _showHabitEditorDialog(existingHabit: habit),
               ),
-              child: Text('${habit.targetDaysPerWeek}x/wk', style: const TextStyle(fontSize: 10, color: Color(0xFF8B949E))),
-            ),
-          ],
-        ),
-      );
-    } else if (habit.type == HabitPropertyType.multiSelect) {
-      final selected = _currentEntry.multiSelects[habit.id] ?? [];
-      return Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: const Color(0xFF161B22),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFF30363D)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Text(habit.icon, style: const TextStyle(fontSize: 18)),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(habit.title, style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
-                ),
-                TextButton.icon(
-                  onPressed: () => _showMultiSelectPicker(habit),
-                  icon: const Icon(Icons.edit, size: 14, color: Color(0xFF388BFD)),
-                  label: const Text('Edit', style: TextStyle(fontSize: 12, color: Color(0xFF388BFD))),
-                ),
-              ],
-            ),
+            ],
+          ),
+          if (habit.type == HabitPropertyType.multiSelect) ...[
             const SizedBox(height: 6),
             Wrap(
               spacing: 6,
               runSpacing: 6,
-              children: selected.isEmpty
-                  ? [
-                      GestureDetector(
-                        onTap: () => _showMultiSelectPicker(habit),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF0D1117),
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(color: const Color(0xFF30363D)),
-                          ),
-                          child: const Text('+ Select options...', style: TextStyle(fontSize: 11, color: Colors.grey)),
-                        ),
-                      ),
-                    ]
-                  : selected.map((item) {
-                      return Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF388BFD).withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: const Color(0xFF388BFD).withValues(alpha: 0.4)),
-                        ),
-                        child: Text(item, style: const TextStyle(fontSize: 11, color: Color(0xFF58A6FF))),
-                      );
-                    }).toList(),
-            ),
-          ],
-        ),
-      );
-    } else {
-      final textVal = _currentEntry.textValues[habit.id] ?? '';
-      return Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: const Color(0xFF161B22),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFF30363D)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
               children: [
-                Text(habit.icon, style: const TextStyle(fontSize: 18)),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(habit.title, style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
+                ...(_currentEntry.multiSelects[habit.id] ?? []).map((item) {
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF388BFD).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: const Color(0xFF388BFD).withValues(alpha: 0.4)),
+                    ),
+                    child: Text(item, style: const TextStyle(fontSize: 11, color: Color(0xFF58A6FF))),
+                  );
+                }),
+                GestureDetector(
+                  onTap: () => _showMultiSelectPicker(habit),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0D1117),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: const Color(0xFF30363D)),
+                    ),
+                    child: Text(
+                      (_currentEntry.multiSelects[habit.id] ?? []).isEmpty ? '+ Select options...' : '+ Edit selection',
+                      style: const TextStyle(fontSize: 11, color: Colors.grey),
+                    ),
+                  ),
                 ),
               ],
             ),
+          ],
+          if (habit.type == HabitPropertyType.text) ...[
             const SizedBox(height: 6),
             TextFormField(
-              initialValue: textVal,
+              initialValue: _currentEntry.textValues[habit.id] ?? '',
               style: const TextStyle(fontSize: 12, color: Colors.white),
               decoration: InputDecoration(
                 hintText: 'Enter notes or metrics...',
@@ -1047,9 +1036,9 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
               },
             ),
           ],
-        ),
-      );
-    }
+        ],
+      ),
+    );
   }
 
   void _showMultiSelectPicker(HabitProperty habit) {
@@ -1070,27 +1059,30 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
                 children: [
                   Text('Select for ${habit.title}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
                   const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: habit.options.map((option) {
-                      final isSelected = currentSelected.contains(option);
-                      return FilterChip(
-                        label: Text(option),
-                        selected: isSelected,
-                        selectedColor: const Color(0xFF388BFD),
-                        onSelected: (val) {
-                          setModalState(() {
-                            if (val) {
-                              currentSelected.add(option);
-                            } else {
-                              currentSelected.remove(option);
-                            }
-                          });
-                        },
-                      );
-                    }).toList(),
-                  ),
+                  if (habit.options.isEmpty)
+                    const Text('No options defined. Edit habit to add comma-separated options.', style: TextStyle(fontSize: 12, color: Colors.grey))
+                  else
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: habit.options.map((option) {
+                        final isSelected = currentSelected.contains(option);
+                        return FilterChip(
+                          label: Text(option),
+                          selected: isSelected,
+                          selectedColor: const Color(0xFF388BFD),
+                          onSelected: (val) {
+                            setModalState(() {
+                              if (val) {
+                                currentSelected.add(option);
+                              } else {
+                                currentSelected.remove(option);
+                              }
+                            });
+                          },
+                        );
+                      }).toList(),
+                    ),
                   const SizedBox(height: 20),
                   SizedBox(
                     width: double.infinity,
@@ -1116,66 +1108,6 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
     );
   }
 
-  Widget _buildReflectionsEditor() {
-    final wealth = _currentEntry.reflections['wealth'] ?? '';
-    final uncomfortable = _currentEntry.reflections['uncomfortable'] ?? '';
-    final recordBreaking = _currentEntry.reflections['recordBreaking'] ?? '';
-    final memories = _currentEntry.reflections['memories'] ?? '';
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF161B22),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF30363D)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Daily Journal & Reflections', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white)),
-          const SizedBox(height: 10),
-          _buildReflectField('Wealth Notes', wealth, (val) => _updateReflection('wealth', val)),
-          _buildReflectField('Did I do anything uncomfortable today?', uncomfortable, (val) => _updateReflection('uncomfortable', val)),
-          _buildReflectField('Any record breaking things I did today?', recordBreaking, (val) => _updateReflection('recordBreaking', val)),
-          _buildReflectField('Daily Memories', memories, (val) => _updateReflection('memories', val)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildReflectField(String label, String value, Function(String) onChanged) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: const TextStyle(fontSize: 11, color: Color(0xFF8B949E))),
-          const SizedBox(height: 4),
-          TextFormField(
-            initialValue: value,
-            maxLines: 2,
-            style: const TextStyle(fontSize: 12, color: Colors.white),
-            decoration: InputDecoration(
-              isDense: true,
-              filled: true,
-              fillColor: const Color(0xFF0D1117),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF30363D))),
-            ),
-            onChanged: onChanged,
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _updateReflection(String key, String val) {
-    final updated = Map<String, String>.from(_currentEntry.reflections);
-    updated[key] = val;
-    final newEntry = _currentEntry.copyWith(reflections: updated);
-    HabitHiveRepository.instance.saveEntry(newEntry);
-    _currentEntry = newEntry;
-  }
-
   Widget _buildMonthlyTableView() {
     final dates = HabitHiveRepository.instance.getRecentDateKeys(count: 30);
 
@@ -1191,7 +1123,7 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
           columns: [
             const DataColumn(label: Text('Date Page', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white))),
             const DataColumn(label: Text('Score %', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white))),
-            ..._habits.map((h) => DataColumn(
+            ..._activeHabits.map((h) => DataColumn(
                   label: Row(
                     children: [
                       Text(h.icon),
@@ -1203,9 +1135,10 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
           ],
           rows: dates.map((dateKey) {
             final entry = HabitHiveRepository.instance.getEntryForDate(dateKey);
+            final habitsForDate = HabitHiveRepository.instance.getActiveHabitsForDate(entry);
             final d = DateTime.parse(dateKey);
             final formatted = _formatNotionDateHeader(d);
-            final score = HabitHiveRepository.instance.calculateDailyScore(_habits, entry);
+            final score = HabitHiveRepository.instance.calculateDailyScore(habitsForDate, entry);
 
             return DataRow(
               cells: [
@@ -1240,7 +1173,7 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
                     child: Text('$score%', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
                   ),
                 ),
-                ..._habits.map((habit) {
+                ..._activeHabits.map((habit) {
                   if (habit.type == HabitPropertyType.checkbox) {
                     final done = entry.checkboxes[habit.id] ?? false;
                     return DataCell(
