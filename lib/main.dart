@@ -1,4 +1,3 @@
-
 import 'dart:async';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
@@ -9,16 +8,6 @@ import 'package:intl/intl.dart';
 
 /// ============================================================================
 /// NOTION-STYLE HABIT TRACKER & OBSIDIAN EXPORTER - GALAXY S25 STANDALONE EDITION
-///
-/// Features:
-/// 1. Hive Local-First Storage (No external databases, zero network permissions)
-/// 2. Interactive Obsidian Directory Picker (FilePicker.platform.getDirectoryPath())
-/// 3. Notion-Style Monthly Database Table View & Page Detail Views
-/// 4. Flexible Habit Property Types:
-///    - Checkbox (Standard Yes/No)
-///    - Multi-Select (e.g. Berries & Nuts: Blueberry, Blackberry, Walnut...)
-///    - Text Input (Freeform notes/metrics)
-/// 5. Clean & Minimal Markdown Export (Excludes unchecked, empty, or negative items)
 /// ============================================================================
 
 void main() async {
@@ -297,7 +286,6 @@ class HabitHiveRepository {
     });
   }
 
-  /// Calculates Daily Score % for a given entry
   int calculateDailyScore(List<HabitProperty> habits, DailyEntryData entry) {
     if (habits.isEmpty) return 0;
     int completed = 0;
@@ -369,17 +357,11 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
     return '@${d.month}.${d.day}.${d.year}-$dayName';
   }
 
-  /// ==========================================================================
-  /// 1 & 4: CLEAN & MINIMAL OBSIDIAN MARKDOWN EXPORT ENGINE
-  /// - Uses FilePicker.platform.getDirectoryPath() to select folder (Obsidian vault)
-  /// - Excludes unchecked, empty, or negative items
-  /// ==========================================================================
   String _generateMinimalMarkdown(DateTime date, DailyEntryData entry) {
     final notionTitle = _formatNotionDateHeader(date);
     final score = HabitHiveRepository.instance.calculateDailyScore(_habits, entry);
 
     final buffer = StringBuffer();
-    // 1. Clean Obsidian YAML Frontmatter
     buffer.writeln('---');
     buffer.writeln('date: ${DateFormat('yyyy-MM-dd').format(date)}');
     buffer.writeln('day: ${DateFormat('EEEE').format(date)}');
@@ -389,10 +371,8 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
     buffer.writeln('  - daily-log');
     buffer.writeln('---\n');
 
-    // 2. Notion-Style Title
     buffer.writeln('# $notionTitle\n');
 
-    // 3. Completed Habits ONLY
     final completedItems = <String>[];
     for (var habit in _habits) {
       if (habit.type == HabitPropertyType.checkbox) {
@@ -421,7 +401,6 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
       buffer.writeln('');
     }
 
-    // 4. Non-Empty Reflections ONLY
     final wealth = entry.reflections['wealth']?.trim();
     final uncomfortable = entry.reflections['uncomfortable']?.trim();
     final recordBreaking = entry.reflections['recordBreaking']?.trim();
@@ -475,10 +454,9 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
 
   Future<void> _exportToObsidianVault() async {
     final mdContent = _generateMinimalMarkdown(_activeDate, _currentEntry);
-    final filename = '${_activeDateKey}.md';
+    final filename = '$_activeDateKey.md';
 
     try {
-      // Feature 1: Prompt user for destination directory using file_picker
       String? selectedDirectory = await FilePicker.platform.getDirectoryPath(
         dialogTitle: 'Select your Obsidian Vault or Target Folder',
       );
@@ -493,24 +471,34 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
             SnackBar(
               content: Text('Saved to Obsidian: $filename'),
               backgroundColor: const Color(0xFF238636),
-              action: SnackBarAction(
-                label: 'Copy Text',
-                textColor: Colors.white,
-                onPressed: () => Clipboard.setData(ClipboardData(text: mdContent)),
-              ),
             ),
           );
         }
       } else {
-        // Fallback option to copy directly if user cancelled directory picker
-        _showCopyMarkdownSheet(mdContent);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Export canceled.')),
+          );
+        }
       }
     } catch (e) {
-      _showCopyMarkdownSheet(mdContent);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Export failed: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
-  void _showCopyMarkdownSheet(String mdContent) {
+  void _showAddHabitDialog() {
+    final titleController = TextEditingController();
+    final iconController = TextEditingController(text: '🎯');
+    final optionsController = TextEditingController();
+    HabitPropertyType selectedType = HabitPropertyType.checkbox;
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -518,51 +506,139 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Obsidian Clean Markdown Preview',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-            const SizedBox(height: 8),
-            Container(
-              height: 220,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0D1117),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFF30363D)),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 20,
+                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
               ),
-              child: SingleChildScrollView(
-                child: Text(
-                  mdContent,
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: Color(0xFFC9D1D9)),
-                ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Create New Habit',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 60,
+                        child: TextField(
+                          controller: iconController,
+                          decoration: const InputDecoration(
+                            labelText: 'Icon',
+                            filled: true,
+                            fillColor: Color(0xFF0D1117),
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextField(
+                          controller: titleController,
+                          decoration: const InputDecoration(
+                            labelText: 'Habit Name',
+                            hintText: 'e.g. Read Book',
+                            filled: true,
+                            fillColor: Color(0xFF0D1117),
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<HabitPropertyType>(
+                    value: selectedType,
+                    dropdownColor: const Color(0xFF161B22),
+                    decoration: const InputDecoration(
+                      labelText: 'Property Type',
+                      filled: true,
+                      fillColor: Color(0xFF0D1117),
+                      border: OutlineInputBorder(),
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: HabitPropertyType.checkbox,
+                        child: Text('Checkbox (Yes/No)'),
+                      ),
+                      DropdownMenuItem(
+                        value: HabitPropertyType.multiSelect,
+                        child: Text('Multi-Select (Tags/Options)'),
+                      ),
+                      DropdownMenuItem(
+                        value: HabitPropertyType.text,
+                        child: Text('Text Input (Notes/Value)'),
+                      ),
+                    ],
+                    onChanged: (val) {
+                      if (val != null) {
+                        setModalState(() => selectedType = val);
+                      }
+                    },
+                  ),
+                  if (selectedType == HabitPropertyType.multiSelect) ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: optionsController,
+                      decoration: const InputDecoration(
+                        labelText: 'Options (comma separated)',
+                        hintText: 'e.g. Red, Blue, Green',
+                        filled: true,
+                        fillColor: Color(0xFF0D1117),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF238636),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      onPressed: () async {
+                        final title = titleController.text.trim();
+                        if (title.isEmpty) return;
+
+                        final options = optionsController.text
+                            .split(',')
+                            .map((e) => e.trim())
+                            .where((e) => e.isNotEmpty)
+                            .toList();
+
+                        final newHabit = HabitProperty(
+                          id: 'h_${DateTime.now().millisecondsSinceEpoch}',
+                          title: title,
+                          icon: iconController.text.trim().isEmpty ? '🎯' : iconController.text.trim(),
+                          category: 'Custom',
+                          type: selectedType,
+                          options: options,
+                          targetDaysPerWeek: 7,
+                          sortOrder: _habits.length,
+                        );
+
+                        await HabitHiveRepository.instance.saveHabit(newHabit);
+                        _loadState();
+                        if (context.mounted) Navigator.pop(context);
+                      },
+                      child: const Text('Save Habit', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ],
               ),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF238636)),
-                onPressed: () {
-                  Clipboard.setData(ClipboardData(text: mdContent));
-                  Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Markdown copied to clipboard!')),
-                  );
-                },
-                icon: const Icon(Icons.copy, size: 16, color: Colors.white),
-                label: const Text('Copy to Clipboard', style: TextStyle(color: Colors.white)),
-              ),
-            ),
-          ],
-        ),
-      ),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -683,24 +759,23 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
         ),
       ),
       body: _selectedViewIndex == 0 ? _buildDailyPageView() : _buildMonthlyTableView(),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _showAddHabitDialog,
+        backgroundColor: const Color(0xFF388BFD),
+        icon: const Icon(Icons.add, color: Colors.white),
+        label: const Text('New Habit', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+      ),
     );
   }
 
-  /// ==========================================================================
-  /// 2b: NOTION PAGE DETAIL VIEW
-  /// ==========================================================================
   Widget _buildDailyPageView() {
     final score = HabitHiveRepository.instance.calculateDailyScore(_habits, _currentEntry);
 
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       children: [
-        // Date Switcher Header
         _buildDateHeaderBar(),
-
         const SizedBox(height: 14),
-
-        // Score Card
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -751,26 +826,16 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
             ],
           ),
         ),
-
         const SizedBox(height: 16),
-
-        // Notion Page Property List
         const Text(
           'Properties',
           style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFFF0F6FC)),
         ),
         const SizedBox(height: 8),
-
         ..._habits.map((habit) => _buildHabitPropertyTile(habit)),
-
         const SizedBox(height: 20),
-
-        // Reflections / Notes
         _buildReflectionsEditor(),
-
         const SizedBox(height: 16),
-
-        // Export Button
         ElevatedButton.icon(
           style: ElevatedButton.styleFrom(
             backgroundColor: const Color(0xFF238636),
@@ -940,7 +1005,6 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
         ),
       );
     } else {
-      // Freeform Text property
       final textVal = _currentEntry.textValues[habit.id] ?? '';
       return Container(
         margin: const EdgeInsets.only(bottom: 8),
@@ -1112,9 +1176,6 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
     _currentEntry = newEntry;
   }
 
-  /// ==========================================================================
-  /// 2a: NOTION-STYLE MONTHLY DATABASE TABLE VIEW
-  /// ==========================================================================
   Widget _buildMonthlyTableView() {
     final dates = HabitHiveRepository.instance.getRecentDateKeys(count: 30);
 
@@ -1148,7 +1209,6 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
 
             return DataRow(
               cells: [
-                // Date page button (opens day in Page View)
                 DataCell(
                   InkWell(
                     onTap: () {
@@ -1168,7 +1228,6 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
                     ),
                   ),
                 ),
-                // Score Badge
                 DataCell(
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -1181,7 +1240,6 @@ class _NotionDatabaseScreenState extends State<NotionDatabaseScreen> {
                     child: Text('$score%', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
                   ),
                 ),
-                // Habit cells
                 ..._habits.map((habit) {
                   if (habit.type == HabitPropertyType.checkbox) {
                     final done = entry.checkboxes[habit.id] ?? false;
