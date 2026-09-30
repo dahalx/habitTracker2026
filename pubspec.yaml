@@ -1,6 +1,6 @@
 
 name: notion_habit_tracker
-description: "A production-grade, air-gapped Notion Habit Tracker & Journal for Android phone."
+description: "Notion-Style Habit Tracker & Obsidian Vault Exporter with Hive local-first storage."
 publish_to: "none"
 version: 2.0.0+1
 
@@ -12,19 +12,22 @@ dependencies:
   flutter:
     sdk: flutter
   
-  # Local SQLite database engine for Android sandbox storage
-  sqflite: ^2.4.1
-  
-  # Cross-platform file system path manipulation
-  path: ^1.9.0
-  
-  # Path provider for locating internal sandbox storage
+  # Local-first embedded NoSQL database engine (sandboxed, fast, zero network)
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+
+  # Interactive Obsidian vault folder picker
+  file_picker: ^8.1.7
+
+  # Local device internal path isolation
   path_provider: ^2.1.5
-  
+
   # Date formatting & internationalization
   intl: ^0.20.2
-  
-  # Material & Cupertino icons
+
+  # Notion-style calendar & table views
+  table_calendar: ^3.1.2
+
   cupertino_icons: ^1.0.8
 
 dev_dependencies:
