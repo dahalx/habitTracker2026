@@ -1,3 +1,4 @@
+
 allprojects {
     repositories {
         google()
@@ -24,9 +25,15 @@ tasks.register<Delete>("clean") {
 }
 
 subprojects {
-    afterEvaluate {
+    if (project.state.executed) {
         project.extensions.findByType(com.android.build.gradle.BaseExtension::class.java)?.apply {
             compileSdkVersion(36)
+        }
+    } else {
+        project.afterEvaluate {
+            project.extensions.findByType(com.android.build.gradle.BaseExtension::class.java)?.apply {
+                compileSdkVersion(36)
+            }
         }
     }
 }
